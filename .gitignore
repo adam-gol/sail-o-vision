@@ -1,0 +1,10 @@
+*.engine
+*.pt
+*.onnx
+*.whl
+detections/
+__pycache__/
+*.pyc
+.venv/
+venvs/
+samples/
