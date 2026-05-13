@@ -1,4 +1,4 @@
-# boat-vision
+# Sail-O-Vision
 
 Real-time marine obstacle and wildlife detection system running on an NVIDIA Jetson Orin Nano Super. 
 Designed for liveaboard sailing use — detects vessels, debris, and anything that isn't water in the 
