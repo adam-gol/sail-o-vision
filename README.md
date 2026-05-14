@@ -33,13 +33,18 @@ what radar doesn't resolve well at close range:
 ## Performance
 
 Validated against the [Singapore Maritime Dataset](https://sites.google.com/site/dilipprasad/home/singapore-maritime-dataset) 
-and [MVTD](https://github.com/AhsanBaidar/MVTD) (182 sequences, 20,386 test frames + 130,368 train frames):
+and [MVTD](https://github.com/AhsanBaidar/MVTD) (182 sequences, ~150,000 frames across 
+boat, ship, sailboat, and USV classes, both test and train splits):
 
-- **92.5% detection rate** on test set across all sequences
+- **98.5% detection rate** across ~150,000 frames
 - **0 false positives** across the entire dataset
-- Misses concentrated in genuinely ambiguous frames (heavy occlusion, extreme haze, motion blur)
-- Open water is a remarkably clean detection environment — the false positive profile on land 
-  (shadows, foliage, architecture) does not exist at sea
+- Test set: 92.5% detection (20,386 frames) — harder sequences, more occlusion/haze
+- Train set: 99.4% detection (129,666 frames)
+- Misses concentrated in genuinely ambiguous frames (heavy occlusion, extreme haze, 
+  motion blur, onshore camera looking across beach — conditions unlikely at sea)
+- Open water is a remarkably clean detection environment — the false positive profile 
+  on land (shadows, foliage, architecture) does not exist at sea
+
 
 ## Target Priority Architecture
 
