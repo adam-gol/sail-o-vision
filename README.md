@@ -6,7 +6,7 @@ forward arc, with a web-based live view and alert system.
 
 ## Hardware
 
-- NVIDIA Jetson Orin Nano Super Dev Kit ($150 + NVMe SSD)
+- NVIDIA Jetson Orin Nano Super Dev Kit ($150 + NVMe SSD) — ~9W active power draw
 - FLIR M300C visible-light PTZ camera (onboard deployment — driveway camera used for development)
 - Raymarine Axiom MFD + AR200 (handles AIS/radar — this system is supplementary)
 - PredictWind DataHub Pro (NMEA 2000 gateway — provides AIS and radar target data over TCP)
@@ -45,7 +45,6 @@ boat, ship, sailboat, and USV classes, both test and train splits):
 - Open water is a remarkably clean detection environment — the false positive profile 
   on land (shadows, foliage, architecture) does not exist at sea
 
-
 ## Target Priority Architecture
 
 Sail-o-vision fuses camera detections with AIS and radar data from the Raymarine/DataHub Pro 
@@ -71,6 +70,11 @@ automatic target acquisition) as TTM sentences, both from the DataHub Pro TCP st
 port 11102. Own vessel heading and position from the same stream allow conversion of all 
 contacts to absolute bearings for camera slew targeting.
 
+Note: NMEA 2000 PGN 128520 (Tracked Target Data) is the N2K equivalent of TTM and contains 
+the same data plus CPA and TCPA directly. Whether the Axiom transmits PGN 128520 when 
+auto-acquisition is active needs verification — if confirmed, direct N2K access via a 
+USB-CAN adapter (e.g. Actisense NGT-1) would be an alternative to the DataHub Pro TCP path.
+
 ## PTZ Scan Pattern
 
 The M300C has a 63.7° horizontal field of view at wide angle, narrowing to 2.3° at 30x zoom.
@@ -90,9 +94,26 @@ SCANNING_AHEAD → (timer) → SCANNING_FLANK
 SCANNING_AHEAD → (detection) → VERIFYING_TARGET
 SCANNING_FLANK → (timer or hard timeout) → SCANNING_AHEAD
 SCANNING_FLANK → (detection) → VERIFYING_TARGET
-VERIFYING_TARGET → (confirmed) → ALERT → SCANNING_AHEAD
+VERIFYING_TARGET → (confirmed) → ALERT + VIDEO_TRACKING
 VERIFYING_TARGET → (not confirmed or timeout) → SCANNING_AHEAD
+VIDEO_TRACKING → (target lost or resolved) → SCANNING_AHEAD
 ```
+
+## PTZ Authority and Raymarine Integration
+
+The M300C supports slew-to-cue (radar/AIS integration) which allows the Raymarine Axiom to 
+command the camera to point at tracked targets. Sail-o-vision and the Raymarine slew-to-cue 
+system cannot both control the PTZ simultaneously — PTZ authority must be managed:
+
+- **Default**: sail-o-vision runs the scan pattern
+- **Raymarine slew-to-cue active**: sail-o-vision yields PTZ control
+- **Slew-to-cue complete**: sail-o-vision resumes scan pattern
+
+Note: Raymarine has not implemented video tracking on the M300C despite the camera supporting 
+it via ONVIF. Sail-o-vision will implement this directly — once a target is confirmed via 
+zoom-and-verify, a lightweight OpenCV tracker (CSRT or KCF, running on CPU alongside YOLO 
+on GPU) keeps the camera locked on the target -- possibly while inference continues on the 
+zoomed view.
 
 ## Installation
 
@@ -196,16 +217,41 @@ Open `http://jetson.local:5000` in any browser on your local network.
 
 ## Planned (requires boat + M300C)
 
+### NMEA 0183 Integration via DataHub Pro
+- Connect to DataHub Pro TCP stream (port 11102) for mixed NMEA 0183 data
+- Parse AIS targets (VDM sentences) — position, bearing, MMSI, vessel name
+- Parse radar auto-acquired targets (TTM sentences) — bearing, range, CPA, TCPA
+- Parse own vessel heading (HDG/HDT) and position (RMC/GLL)
+- Convert all contacts to absolute bearings for camera slew targeting
+- Filter camera detections against known contacts to implement target priority queue
+
+### PTZ Control
 - ONVIF PTZ control of FLIR M300C
 - Automated 180° horizon scan pattern (5 min ahead, 30s each flank, tunable)
 - Zoom-and-verify on flagged bearings per target priority queue
-- NMEA 0183 integration via DataHub Pro TCP stream:
-  - AIS targets (VDM sentences) for known vessel filtering
-  - Radar auto-acquired targets (TTM sentences) for dark vessel detection
-  - Own vessel heading and position for absolute bearing calculations
-- Marine threshold tuning against real ocean conditions
+- PTZ authority management between sail-o-vision and Raymarine slew-to-cue
+- Video tracking via OpenCV CSRT/KCF tracker to maintain camera lock on confirmed targets
+  while YOLO continues inference on the zoomed view
+
+### Collision Alarms (Investigation Required)
+For Priority 1 targets (camera-only, no AIS, no radar) on a collision course, options 
+for alerting via the Axiom MFD:
+
+- **Standards-based**: NMEA 2000 Alert PGNs 126983-126988 — correct approach, 
+  Axiom support needs verification
+- **Proprietary**: Raymarine PGN 65228 — documented by Yacht Devices as triggering 
+  Raymarine-specific alarms on Axiom (experimental)
+- **Fallback**: Audio/visual alert via sail-o-vision web interface only
+
+All N2K transmission options require a USB-CAN adapter (e.g. Actisense NGT-1, ~$200) 
+to put messages on the SeaTalkNG bus from the Jetson.
+
+### Marine Tuning
+- Confidence threshold tuning against real ocean conditions
 - Allowlist/blocklist tuning for marine-specific false positive suppression
 - KOLOMVERSE 4K dataset evaluation (access requested, pending approval)
+- Fine-tuning on MVTD training set (130,368 labeled frames available locally) 
+  if detection rate improvements are needed
 
 ## Datasets used for validation
 
