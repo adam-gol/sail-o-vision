@@ -17,7 +17,7 @@ from typing import Optional
 
 DEFAULT_FILE = os.path.expanduser("~/nmea/AIS Sample 1 NMEA0183.txt")
 DEFAULT_PORT = 25000
-DEFAULT_BROADCAST = "192.168.55.255"
+DEFAULT_BROADCAST = "127.0.0.1"
 DEFAULT_RATE = 10  # lines per second
 
 import re
@@ -43,27 +43,26 @@ def extract_sentence(line: str) -> Optional[str]:
 
 def replay(file_path, broadcast_addr, port, rate):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    # sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
     delay = 1.0 / rate
     sent = 0
     skipped = 0
 
     print(f"Replaying {file_path}")
-    print(f"Broadcasting to {broadcast_addr}:{port} at {rate} lines/sec")
+    print(f"Sending to {broadcast_addr}:{port} at {rate} lines/sec")
     print("Ctrl+C to stop\n")
 
-    # Send synthetic own vessel position before replaying file
-    # Own vessel near SE Alaska (matches AIS sample data area)
     own_rmc = "$GPRMC,172733.00,A,3750.40600,N,12224.40200,W,0.0,0.0,150526,013.5,E,A*24\r\n"
 
-    for _ in range(5):  # send several times to ensure client receives it
+    # Send own position immediately
+    for _ in range(5):
         sock.sendto(own_rmc.encode('ascii'), (broadcast_addr, port))
         time.sleep(0.1)
     print("Sent own vessel position")
 
     try:
-        while True:  # loop forever
+        while True:
             with open(file_path, 'r', errors='ignore') as f:
                 for line in f:
                     sentence = extract_sentence(line)
@@ -73,16 +72,12 @@ def replay(file_path, broadcast_addr, port, rate):
                     sock.sendto((sentence + '\r\n').encode('ascii'),
                                 (broadcast_addr, port))
                     sent += 1
-                    line = line.strip()
-                    if not line:
-                        continue
-                    # Only send NMEA sentences, skip error lines
-                    if not (line.startswith('!') or line.startswith('$')):
-                        skipped += 1
-                        continue
-                    sock.sendto((line + '\r\n').encode('ascii'),
-                                (broadcast_addr, port))
-                    sent += 1
+
+                    # Send own position every 200 sentences
+                    if sent % 20 == 0:
+                        sock.sendto(own_rmc.encode('ascii'),
+                                    (broadcast_addr, port))
+
                     if sent % 100 == 0:
                         print(f"Sent {sent} sentences ({skipped} skipped)...")
                     time.sleep(delay)

@@ -11,6 +11,7 @@ any NMEA 0183 UDP broadcast source including nmea_replay.py.
 
 import socket
 import threading
+import queue
 import time
 import math
 import logging
@@ -24,8 +25,8 @@ logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 NMEA_UDP_PORT = 25000
-CONTACT_EXPIRY_SECONDS = 120   # contacts older than this are removed
-CLEANUP_INTERVAL = 30          # how often to run expiry cleanup
+CONTACT_EXPIRY_SECONDS = 120
+CLEANUP_INTERVAL = 30
 
 
 # --- Data structures ---
@@ -35,29 +36,28 @@ class AISContact:
     mmsi: int
     lat: float
     lon: float
-    sog: float          # speed over ground, knots
-    cog: float          # course over ground, degrees true
-    heading: int        # true heading, degrees (511 = unavailable)
+    sog: float
+    cog: float
+    heading: int
     name: str = ""
     ship_type: int = 0
     last_update: float = field(default_factory=time.time)
-
-    # Computed fields (filled in by bearing calculator)
-    bearing_from_own: Optional[float] = None  # degrees true
+    bearing_from_own: Optional[float] = None
     range_nm: Optional[float] = None
 
 
 @dataclass
 class TTMContact:
     target_id: int
-    bearing: float      # degrees true
-    distance: float     # nautical miles
-    course: float       # degrees true
-    speed: float        # knots
-    cpa: float          # closest point of approach, nm
-    tcpa: float         # time to CPA, minutes
+    bearing: float
+    distance: float
+    course: float
+    speed: float
+    cpa: float
+    tcpa: float
     status: str = ""
     last_update: float = field(default_factory=time.time)
+
 
 @dataclass
 class OwnVessel:
@@ -65,10 +65,11 @@ class OwnVessel:
     lon: float = 0.0
     sog: float = 0.0
     cog: float = 0.0
-    heading: float = 0.0          # true heading degrees
+    heading: float = 0.0
     magnetic_heading: float = 0.0
-    variation: float = 0.0        # magnetic variation, positive=East
+    variation: float = 0.0
     last_update: float = 0.0
+
 
 # --- NMEA Client ---
 
@@ -81,25 +82,33 @@ class NMEAClient:
         self.contact_expiry = contact_expiry
 
         self.own_vessel = OwnVessel()
-        self.ais_contacts: Dict[int, AISContact] = {}   # keyed by MMSI
-        self.ttm_contacts: Dict[int, TTMContact] = {}   # keyed by target ID
+        self.ais_contacts: Dict[int, AISContact] = {}
+        self.ttm_contacts: Dict[int, TTMContact] = {}
 
         self._lock = threading.Lock()
+        self._ready = threading.Event()
         self._running = False
+        self._queue = queue.Queue(maxsize=1000)
+
         self._thread = None
+        self._worker_thread = None
         self._cleanup_thread = None
 
-        # Multi-part AIS message buffer: key = (channel, seq_id)
         self._ais_buffer: Dict[tuple, list] = {}
 
     def start(self):
         self._running = True
         self._thread = threading.Thread(
             target=self._listen_loop, daemon=True, name="nmea-listener")
-        self._thread.start()
+        self._worker_thread = threading.Thread(
+            target=self._worker_loop, daemon=True, name="nmea-worker")
         self._cleanup_thread = threading.Thread(
             target=self._cleanup_loop, daemon=True, name="nmea-cleanup")
+        self._thread.start()
+        self._worker_thread.start()
         self._cleanup_thread.start()
+        if not self._ready.wait(timeout=5.0):
+            logger.warning("Socket did not bind within 5 seconds")
         logger.info(f"NMEA client started, listening on UDP port {self.port}")
 
     def stop(self):
@@ -108,8 +117,7 @@ class NMEAClient:
     # --- Public interface ---
 
     def get_own_vessel(self) -> OwnVessel:
-        with self._lock:
-            return self.own_vessel
+        return self.own_vessel
 
     def get_ais_contacts(self) -> Dict[int, AISContact]:
         with self._lock:
@@ -121,7 +129,6 @@ class NMEAClient:
 
     def get_contact_at_bearing(self, bearing: float,
                                 tolerance: float = 10.0) -> Optional[object]:
-        """Return any known contact within tolerance degrees of bearing."""
         with self._lock:
             for contact in self.ais_contacts.values():
                 if contact.bearing_from_own is not None:
@@ -138,15 +145,15 @@ class NMEAClient:
                     return contact
         return None
 
-    # --- Internal ---
+    # --- Listener thread: receive only, no parsing ---
 
     def _listen_loop(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         sock.settimeout(1.0)
-        sock.bind(('', self.port))
-
+        sock.bind(('127.0.0.1', self.port))
+        self._ready.set()
         logger.info(f"Listening on UDP port {self.port}")
 
         while self._running:
@@ -156,13 +163,28 @@ class NMEAClient:
                 for sentence in sentences.splitlines():
                     sentence = sentence.strip()
                     if sentence:
-                        self._process_sentence(sentence)
+                        try:
+                            self._queue.put_nowait(sentence)
+                        except queue.Full:
+                            pass  # drop oldest, prefer live data
             except socket.timeout:
                 continue
             except Exception as e:
                 logger.warning(f"Receive error: {e}")
 
         sock.close()
+
+    # --- Worker thread: parse sentences from queue ---
+
+    def _worker_loop(self):
+        while self._running:
+            try:
+                sentence = self._queue.get(timeout=1.0)
+                self._process_sentence(sentence)
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.warning(f"Worker error: {e}")
 
     def _process_sentence(self, sentence: str):
         try:
@@ -172,13 +194,13 @@ class NMEAClient:
                 self._handle_ttm(sentence)
             elif sentence.startswith('$') and 'RMC' in sentence:
                 self._handle_rmc(sentence)
-            elif sentence.startswith('$') and ('HDG' in sentence or 'HDT' in sentence):
+            elif sentence.startswith('$') and ('HDG' in sentence or
+                                                'HDT' in sentence):
                 self._handle_hdg(sentence)
         except Exception as e:
             logger.debug(f"Parse error on '{sentence}': {e}")
 
     def _handle_ais(self, sentence: str):
-        """Handle AIS VDM sentences, including multi-part messages."""
         parts = sentence.split(',')
         if len(parts) < 7:
             return
@@ -189,10 +211,8 @@ class NMEAClient:
         channel = parts[4]
 
         if total_parts == 1:
-            # Single part message - decode immediately
             self._decode_ais([sentence])
         else:
-            # Multi-part - buffer until complete
             key = (channel, seq_id)
             with self._lock:
                 if key not in self._ais_buffer:
@@ -200,20 +220,24 @@ class NMEAClient:
                 self._ais_buffer[key].append(sentence)
                 if len(self._ais_buffer[key]) == total_parts:
                     parts_to_decode = self._ais_buffer.pop(key)
-                    self._decode_ais(parts_to_decode)
+            if len(parts_to_decode) == total_parts:
+                self._decode_ais(parts_to_decode)
 
     def _decode_ais(self, sentences: list):
         try:
+            # Decode outside the lock — can be slow
             msg = ais_decode(*[s.encode() for s in sentences])
 
-            # Message types 1, 2, 3 = position report Class A
-            # Message type 18 = position report Class B
             if msg.msg_type in (1, 2, 3, 18):
                 lat = float(msg.lat) if msg.lat else 0.0
                 lon = float(msg.lon) if msg.lon else 0.0
                 sog = float(msg.speed) if hasattr(msg, 'speed') else 0.0
                 cog = float(msg.course) if hasattr(msg, 'course') else 0.0
                 heading = int(msg.heading) if hasattr(msg, 'heading') else 511
+
+                # Read own vessel without lock — floats are atomic in CPython
+                own_lat = self.own_vessel.lat
+                own_lon = self.own_vessel.lon
 
                 contact = AISContact(
                     mmsi=msg.mmsi,
@@ -224,25 +248,21 @@ class NMEAClient:
                     heading=heading
                 )
 
-                # Update bearing from own vessel
-                own = self.own_vessel
-                if own.lat != 0.0 and lat != 0.0:
+                if own_lat != 0.0 and lat != 0.0:
                     contact.bearing_from_own = self._bearing(
-                        own.lat, own.lon, lat, lon)
+                        own_lat, own_lon, lat, lon)
                     contact.range_nm = self._range_nm(
-                        own.lat, own.lon, lat, lon)
+                        own_lat, own_lon, lat, lon)
 
+                # Only hold lock for dict write
                 with self._lock:
                     if msg.mmsi in self.ais_contacts:
-                        # Preserve name from static data message
                         contact.name = self.ais_contacts[msg.mmsi].name
                     self.ais_contacts[msg.mmsi] = contact
-                    logger.debug(f"AIS {msg.mmsi}: "
-                                 f"lat={lat:.4f} lon={lon:.4f} "
-                                 f"sog={sog:.1f} cog={cog:.1f} "
-                                 f"bearing={contact.bearing_from_own}")
 
-            # Message type 24 = static data (name)
+                logger.debug(f"AIS {msg.mmsi}: lat={lat:.4f} lon={lon:.4f} "
+                             f"bearing={contact.bearing_from_own}")
+
             elif msg.msg_type == 24:
                 if hasattr(msg, 'shipname') and msg.shipname:
                     name = str(msg.shipname).strip()
@@ -251,7 +271,6 @@ class NMEAClient:
                             self.ais_contacts[msg.mmsi].name = name
                     logger.debug(f"AIS {msg.mmsi} name: {name}")
 
-            # Message type 5 = static and voyage data (name, destination)
             elif msg.msg_type == 5:
                 if hasattr(msg, 'shipname') and msg.shipname:
                     name = str(msg.shipname).strip()
@@ -266,7 +285,6 @@ class NMEAClient:
             logger.debug(f"AIS decode error: {e}")
 
     def _handle_ttm(self, sentence: str):
-        """Handle TTM (Tracked Target Message) from radar."""
         try:
             msg = pynmea2.parse(sentence)
             target_id = int(msg.target_number)
@@ -292,39 +310,32 @@ class NMEAClient:
             with self._lock:
                 self.ttm_contacts[target_id] = contact
 
-            logger.debug(f"TTM target {target_id}: "
-                         f"bearing={bearing:.1f} distance={distance:.2f}nm "
-                         f"CPA={cpa:.2f}nm TCPA={tcpa:.1f}min")
+            logger.debug(f"TTM target {target_id}: bearing={bearing:.1f} "
+                        f"distance={distance:.2f}nm")
 
         except Exception as e:
             logger.debug(f"TTM parse error: {e}")
 
     def _handle_rmc(self, sentence: str):
-        """Handle RMC (Recommended Minimum) for own vessel position."""
         try:
             msg = pynmea2.parse(sentence)
-            if msg.status == 'A':  # valid fix
-                with self._lock:
-                    self.own_vessel.lat = msg.latitude
-                    self.own_vessel.lon = msg.longitude
-                    self.own_vessel.sog = float(msg.spd_over_grnd or 0)
-                    self.own_vessel.cog = float(msg.true_course or 0)
-                    self.own_vessel.last_update = time.time()
-                logger.debug(f"Own vessel: "
-                             f"lat={msg.latitude:.4f} "
-                             f"lon={msg.longitude:.4f} "
-                             f"sog={self.own_vessel.sog:.1f}")
+            if msg.status == 'A':
+                self.own_vessel.lat = msg.latitude
+                self.own_vessel.lon = msg.longitude
+                self.own_vessel.sog = float(msg.spd_over_grnd or 0)
+                self.own_vessel.cog = float(msg.true_course or 0)
+                self.own_vessel.last_update = time.time()
+                logger.debug(f"Own vessel: lat={msg.latitude:.4f} "
+                            f"lon={msg.longitude:.4f} "
+                            f"sog={self.own_vessel.sog:.1f}")
         except Exception as e:
             logger.debug(f"RMC parse error: {e}")
 
     def _handle_hdg(self, sentence: str):
-        """Handle HDG/HDT for own vessel heading, converting to true."""
         try:
             msg = pynmea2.parse(sentence)
             if 'HDT' in sentence:
-                # Already true heading
-                with self._lock:
-                    self.own_vessel.heading = float(msg.heading or 0)
+                self.own_vessel.heading = float(msg.heading or 0)
             elif 'HDG' in sentence:
                 mag_heading = float(msg.heading or 0)
                 variation = 0.0
@@ -332,18 +343,13 @@ class NMEAClient:
                     variation = float(msg.mag_var)
                     if hasattr(msg, 'mag_var_dir') and msg.mag_var_dir == 'W':
                         variation = -variation
-                true_heading = (mag_heading + variation) % 360
-                with self._lock:
-                    self.own_vessel.heading = true_heading
-                    self.own_vessel.magnetic_heading = mag_heading
-                    self.own_vessel.variation = variation
-                logger.debug(f"Heading: {mag_heading:.1f}M + "
-                            f"{variation:.1f} var = {true_heading:.1f}T")
+                self.own_vessel.heading = (mag_heading + variation) % 360
+                self.own_vessel.magnetic_heading = mag_heading
+                self.own_vessel.variation = variation
         except Exception as e:
             logger.debug(f"HDG parse error: {e}")
 
     def _cleanup_loop(self):
-        """Remove stale contacts periodically."""
         while self._running:
             time.sleep(CLEANUP_INTERVAL)
             now = time.time()
@@ -369,7 +375,6 @@ class NMEAClient:
     @staticmethod
     def _bearing(lat1: float, lon1: float,
                  lat2: float, lon2: float) -> float:
-        """Calculate true bearing from point 1 to point 2."""
         lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
         dlon = lon2 - lon1
         x = math.sin(dlon) * math.cos(lat2)
@@ -381,8 +386,7 @@ class NMEAClient:
     @staticmethod
     def _range_nm(lat1: float, lon1: float,
                   lat2: float, lon2: float) -> float:
-        """Calculate range in nautical miles using haversine formula."""
-        R = 3440.065  # Earth radius in nautical miles
+        R = 3440.065
         lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
         dlat = lat2 - lat1
         dlon = lon2 - lon1
@@ -421,13 +425,14 @@ if __name__ == '__main__':
                   f"hdg={own.heading:.1f} sog={own.sog:.1f}kn")
             print(f"AIS contacts: {len(ais)}")
             for mmsi, c in sorted(ais.items()):
-                print(f"  {mmsi} {c.name or '(unnamed)':20s} "
-                      f"lat={c.lat:.4f} lon={c.lon:.4f} "
-                      f"sog={c.sog:.1f}kn cog={c.cog:.1f}° "
-                      f"bearing={c.bearing_from_own:.1f}° "
-                      f"range={c.range_nm:.2f}nm"
-                      if c.bearing_from_own is not None
-                      else f"  {mmsi} (no own position for bearing calc)")
+                if c.bearing_from_own is not None:
+                    print(f"  {mmsi} {c.name or '(unnamed)':20s} "
+                          f"lat={c.lat:.4f} lon={c.lon:.4f} "
+                          f"sog={c.sog:.1f}kn cog={c.cog:.1f}° "
+                          f"bearing={c.bearing_from_own:.1f}° "
+                          f"range={c.range_nm:.2f}nm")
+                else:
+                    print(f"  {mmsi} (no own position for bearing calc)")
             print(f"TTM contacts: {len(ttm)}")
             for tid, c in sorted(ttm.items()):
                 print(f"  Target {tid}: bearing={c.bearing:.1f}° "
