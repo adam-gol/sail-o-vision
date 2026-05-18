@@ -268,6 +268,15 @@ for alerting via the Axiom MFD:
 All N2K transmission options require a USB-CAN adapter (e.g. Actisense NGT-1, ~$200) 
 to put messages on the SeaTalkNG bus from the Jetson.
 
+### Alert Severity Hierarchy
+Camera detections with estimated distance will use a three-level severity:
+- **Emergency** (≤30m) — imminent collision risk
+- **Warn** (≤75m) — close approach, take action  
+- **Normal** (>75m) — awareness only
+
+Severity feeds into both the web UI alert bar color and the NMEA 2000 alert PGN 
+urgency field.
+
 ### Interesting Third-Party Hardware - Digital Yacht NavAlarm
 [NavAlarm](https://digitalyacht.co.uk/product/navalarm/) is a standalone NMEA 2000 
 device that triggers a physical audible alarm when it receives NMEA 2000 Alert PGNs 
