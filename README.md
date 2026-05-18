@@ -217,6 +217,26 @@ Open `http://jetson.local:5000` in any browser on your local network.
 
 ## Planned (requires boat + M300C)
 
+### Chartplotter and Alert Integration (Investigation Required)
+
+Two complementary approaches planned, both to be tested against the actual Axiom:
+
+**Synthetic AIS targets** — camera-detected contacts injected as fake AIS vessels 
+(fixed MMSIs in reserved range per class: FW-SHIP, FW-BOAT, FW-DEBRIS, FW-LOG etc.) 
+into the NMEA 0183 stream. Axiom displays them as chart targets with CPA vectors using 
+its existing AIS collision avoidance machinery. Approach validated by the 
+[signalk-forward-watch](https://github.com/SkipperDon/signalk-forward-watch) project.
+**Risk**: fake targets must not reach the AIS transponder for retransmission — 
+requires careful NMEA network topology.
+
+**NMEA 2000 Alert PGNs (126983-126988)** — standards-based alert from Jetson to 
+Axiom via USB-CAN adapter (e.g. Actisense NGT-1). Triggers audible alarm via 
+Digital Yacht NavAlarm. Whether Axiom displays external alerts from PGN 126983 
+needs verification.
+
+Both will be implemented and tested — they are complementary: synthetic AIS provides 
+visual chart targets, PGN 126983 provides audible alerts.
+
 ### NMEA 0183 Integration via DataHub Pro
 - Connect to DataHub Pro TCP stream (port 11102) for mixed NMEA 0183 data
 - Parse AIS targets (VDM sentences) — position, bearing, MMSI, vessel name
@@ -224,6 +244,8 @@ Open `http://jetson.local:5000` in any browser on your local network.
 - Parse own vessel heading (HDG/HDT) and position (RMC/GLL)
 - Convert all contacts to absolute bearings for camera slew targeting
 - Filter camera detections against known contacts to implement target priority queue
+
+### Or NMEA 2000 Integration via TBD
 
 ### PTZ Control
 - ONVIF PTZ control of FLIR M300C
