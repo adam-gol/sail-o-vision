@@ -246,6 +246,46 @@ for alerting via the Axiom MFD:
 All N2K transmission options require a USB-CAN adapter (e.g. Actisense NGT-1, ~$200) 
 to put messages on the SeaTalkNG bus from the Jetson.
 
+### Interesting Third-Party Hardware - Digital Yacht NavAlarm
+[NavAlarm](https://digitalyacht.co.uk/product/navalarm/) is a standalone NMEA 2000 
+device that triggers a physical audible alarm when it receives NMEA 2000 Alert PGNs 
+(126983-126988). This is relevant to sail-o-vision's collision alarm investigation:
+
+- Provides a standards-based audible alert path that doesn't depend on MFD display behavior
+- The NMEA organisation has mandated all MFDs to output alert PGN information onto the 
+  NMEA 2000 network, suggesting increasing standardisation of alert PGN support
+- If the Axiom supports receiving external alert PGNs (needs verification), sail-o-vision 
+  could trigger both a NavAlarm audible alert and an Axiom display alert through the same 
+  PGN 126983 transmission
+- Requires a USB-CAN adapter (e.g. Actisense NGT-1) for the Jetson to put messages on 
+  the SeaTalkNG bus
+
+Open question: does the Axiom display alerts triggered by an *external* device sending 
+PGN 126983, or only its own internally-generated alerts?
+
+### Interesting Third-Party Hardware - Digital Yacht NavAlert
+[NavAlert](https://digitalyacht.co.uk/product/navalert/) is an NMEA 2000 monitor and 
+alert solution with custom anchor and collision alarms, configurable thresholds for any 
+N2K parameter, and pop-up alarms on Garmin MFDs (Raymarine compatibility unverified).
+
+Sail-o-vision could implement equivalent collision alarm logic in software for 
+camera-detected contacts, without requiring the NavAlert hardware:
+
+- For **Priority 1 contacts** (camera-only, no AIS/radar), own vessel SOG/COG and 
+  target bearing/range are known from the NMEA stream and camera detection respectively
+- For **stationary targets** (debris, containers, whales at surface), SOG=0 so CPA 
+  equals current range minus distance own vessel travels on current heading — 
+  straightforward to calculate
+- For **moving targets** without AIS, target SOG/COG is unknown — CPA calculation 
+  requires tracking bearing rate of change over multiple detections to estimate target 
+  motion
+- Once CPA/TCPA is estimated, a PGN 126983 alert can be sent to the N2K bus, 
+  triggering NavAlarm (audible) and potentially the Axiom display
+
+This would give sail-o-vision genuine collision avoidance capability for the class of 
+contacts that Raymarine cannot see — the primary threat scenario the system is designed 
+for.
+
 ### Marine Tuning
 - Confidence threshold tuning against real ocean conditions
 - Allowlist/blocklist tuning for marine-specific false positive suppression
