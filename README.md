@@ -219,6 +219,7 @@ pip install ultralytics flask opencv-python-headless
 
 Export the model once — this compiles for your specific hardware and takes ~10 minutes:
 
+```bash
 # Export eWaSR to ONNX then TensorRT
 python3 ~/sail-o-vision/samples/export_ewasr_onnx.py
 trtexec \
@@ -233,8 +234,9 @@ from ultralytics import YOLO
 model = YOLO('path/to/yolov8s_kolomverse/best.pt')
 model.export(format='engine', half=True, device=0, imgsz=640)
 "
+```
 
-The resulting `yolov8l.engine` file is hardware-specific and will not transfer to another device.
+The resulting engine files are hardware-specific and will not transfer to another device.
 
 ### Configuration
 
@@ -270,6 +272,51 @@ EOF'
 sudo systemctl daemon-reload
 sudo systemctl enable vision
 sudo systemctl start vision
+```
+
+## Running
+
+```bash
+source ~/venvs/vision/bin/activate
+```
+
+### Two-stage pipeline (PyTorch)
+
+```bash
+# On a video file (dev/test)
+python3 ~/sail-o-vision/samples/pipeline_live.py ~/sail-o-vision/samples/kolomverse_test.mp4
+
+# On a live RTSP stream
+python3 ~/sail-o-vision/samples/pipeline_live.py rtsp://camera-ip/stream
+```
+
+### Two-stage pipeline (TensorRT — faster)
+
+```bash
+# On a video file
+python3 ~/sail-o-vision/samples/pipeline_trt.py ~/sail-o-vision/samples/kolomverse_test.mp4
+
+# On a live RTSP stream
+python3 ~/sail-o-vision/samples/pipeline_trt.py rtsp://camera-ip/stream
+```
+
+### Web server
+
+```bash
+python3 ~/sail-o-vision/vision_server.py
+# Open http://jetson.local:5000
+```
+
+### NMEA / AIS client
+
+```bash
+python3 ~/sail-o-vision/nmea_client.py
+```
+
+### Evaluate on MVTD
+
+```bash
+python3 ~/sail-o-vision/evaluate_mvtd.py
 ```
 
 ## Usage
