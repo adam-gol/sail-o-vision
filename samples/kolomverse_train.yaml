@@ -1,0 +1,3 @@
+image_dir: /home/adam/samples/KOLOMVERSE/images/validation/0
+mask_dir: /home/adam/samples/masks_kolomverse
+image_list: /home/adam/samples/kolomverse_train_list.txt

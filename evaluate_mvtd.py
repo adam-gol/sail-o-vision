@@ -2,7 +2,7 @@ import cv2
 import os
 from ultralytics import YOLO
 
-DATA_DIR = os.path.expanduser("~/samples/MVTD_data/test")
+DATA_DIR = os.path.expanduser("~/sail-o-vision/samples/MVTD_data/test")
 CONF_THRESHOLD = 0.25
 EXCLUDED_CLASSES = {"frisbee", "bench", "train"}
 

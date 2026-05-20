@@ -13,12 +13,46 @@ forward arc, with a web-based live view and alert system.
 
 ## What it does
 
-- Runs YOLOv8l object detection compiled to TensorRT FP16 at ~21 FPS on a live RTSP stream
+- Two-stage AI detection pipeline: eWaSR segmentation (Stage 1) + YOLO classification on zoomed crops (Stage 2)
+- Runs at ~14-17 FPS end-to-end with TensorRT optimization (Jetson Orin Nano Super)
 - Web interface at `http://jetson.local:5000` showing live annotated video
 - Browser alert (visual + audio) when something is detected above confidence threshold
 - Persistent detection log with paginated gallery, click-to-view annotated images
 - Starts automatically on boot via systemd
 - Auto-reconnects on stream dropout
+
+## Two-Stage Pipeline Architecture
+
+### Stage 1 — eWaSR Wide FOV Scan
+
+[eWaSR](https://github.com/tersekmatija/eWaSR) (embedded Water Segmentation and Recognition, Teršek et al., Sensors 2023) runs continuously on the camera feed, segmenting each frame into obstacle / water / sky. Connected-component analysis finds obstacle blobs in the water region. Coastline blobs are filtered by shape (aspect ratio > 4, area > 5% of image, touching image edges). Surviving blobs trigger Stage 2.
+
+- Input: 192×256 (downsampled from 4K)
+- Inference: ~53ms on Orin GPU
+- Fine-tuned on KOLOMVERSE for fishnet buoy detection
+- Trained on: MaSTr1325 (baseline) + KOLOMVERSE validation set (fine-tune)
+
+### Stage 2 — YOLO Zoom and Verify
+
+When Stage 1 finds a candidate, a 4× zoom crop is extracted from the full-resolution frame centered on the blob centroid (simulating PTZ zoom). YOLOv8s classifies the crop. Confirmed detections above confidence threshold generate alerts.
+
+- Model: yolov8s fine-tuned on KOLOMVERSE (mAP50: 0.830)
+- Classes: ship (0), buoy (1), fishnet buoy (2), lighthouse (3), wind farm (4)
+- Alert classes: ship, buoy, fishnet buoy
+- Inference: ~45ms on Orin GPU
+
+### eWaSR Fine-tuning Pipeline
+
+eWaSR was fine-tuned to improve detection of fishnet buoys and small vessels:
+
+1. KOLOMVERSE bounding box annotations → MobileSAM pixel masks (pseudo-ground-truth)
+2. eWaSR baseline predictions supply sky/water labels for unannotated pixels
+3. Combined masks used for supervised fine-tuning
+4. Training on Google Colab T4 (Jetson cannot train 60M parameter model in-memory)
+5. Result: visible improvement on fishnet buoy detection (image 0000068636)
+
+Scripts: `~/sail-o-vision/samples/generate_masks.py`, masks at `~/sail-o-vision/samples/masks_kolomverse/`
+Fine-tuned weights: `~/sail-o-vision/samples/eWaSR/pretrained/ewasr_kolomverse.pth`
 
 ## What it's for
 
@@ -32,18 +66,44 @@ what radar doesn't resolve well at close range:
 
 ## Performance
 
-Validated against the [Singapore Maritime Dataset](https://sites.google.com/site/dilipprasad/home/singapore-maritime-dataset) 
-and [MVTD](https://github.com/AhsanBaidar/MVTD) (182 sequences, ~150,000 frames across 
-boat, ship, sailboat, and USV classes, both test and train splits):
+### Detection pipeline
 
-- **98.5% detection rate** across ~150,000 frames
-- **0 false positives** across the entire dataset
-- Test set: 92.5% detection (20,386 frames) — harder sequences, more occlusion/haze
-- Train set: 99.4% detection (129,666 frames)
-- Misses concentrated in genuinely ambiguous frames (heavy occlusion, extreme haze, 
-  motion blur, onshore camera looking across beach — conditions unlikely at sea)
-- Open water is a remarkably clean detection environment — the false positive profile 
-  on land (shadows, foliage, architecture) does not exist at sea
+| Version | Mean latency | FPS | Notes |
+|---------|-------------|-----|-------|
+| PyTorch, video file | 121ms | 8.3 | Includes disk I/O |
+| TensorRT, video file | 70ms | 14.2 | Includes disk I/O |
+| TensorRT, live feed (estimated) | ~60ms | ~17 | No disk I/O |
+
+Latency varies with scene complexity — frames with no obstacle blobs run in 15-23ms (eWaSR only); frames with 2-3 blobs run 120-180ms (eWaSR + multiple YOLO crops).
+
+### TensorRT speedups
+
+| Model | PyTorch | TensorRT | Speedup |
+|-------|---------|----------|---------|
+| eWaSR ResNet-18 (192×256) | 53ms | 17ms | 3× |
+| YOLOv8s (640px crop) | 45ms | 39ms | 1.2× |
+
+Engine files (hardware-specific to Orin Nano Super, not transferable):
+- eWaSR: `~/sail-o-vision/samples/ewasr_resnet18.engine`
+- YOLO: `~/sail-o-vision/samples/KOLOMVERSE/scripts/models/yolov8s_kolomverse/weights/best.engine`
+
+### Detection quality
+
+Evaluated on KOLOMVERSE validation set (1,746 annotated images, 5 classes):
+
+| Model | mAP50 | ship | buoy | fishnet buoy | lighthouse | wind farm |
+|-------|-------|------|------|--------------|------------|-----------|
+| yolov8s_kolomverse | 0.830 | 0.928 | 0.763 | 0.724 | 0.855 | 0.878 |
+
+Cross-dataset generalization is poor (KOLOMVERSE → SMD: 0.371 mAP) — domain gap between Korean coastal waters and other maritime environments. Mixed-dataset training is the planned fix.
+
+### Evaluation framework
+
+Standard mAP is not the right metric for navigation safety. The correct framework is the **MODS evaluation protocol** (Bovcon et al., IEEE T-ITS 2021):
+- Class-agnostic recall within a **danger zone** (not mAP50)
+- 15% overlap threshold (vs 50% IoU for standard mAP)
+- Asymmetric cost: missed detection >> false positive
+- Code: [github.com/bborja/mods_evaluation](https://github.com/bborja/mods_evaluation)
 
 ## Target Priority Architecture
 
@@ -159,13 +219,20 @@ pip install ultralytics flask opencv-python-headless
 
 Export the model once — this compiles for your specific hardware and takes ~10 minutes:
 
-```bash
+# Export eWaSR to ONNX then TensorRT
+python3 ~/sail-o-vision/samples/export_ewasr_onnx.py
+trtexec \
+    --onnx=~/sail-o-vision/samples/ewasr_resnet18.onnx \
+    --saveEngine=~/sail-o-vision/samples/ewasr_resnet18.engine \
+    --fp16 \
+    --memPoolSize=workspace:4096
+
+# Export YOLO to TensorRT (takes ~8 minutes)
 python3 -c "
 from ultralytics import YOLO
-model = YOLO('yolov8l.pt')
-model.export(format='engine', half=True, device=0)
+model = YOLO('path/to/yolov8s_kolomverse/best.pt')
+model.export(format='engine', half=True, device=0, imgsz=640)
 "
-```
 
 The resulting `yolov8l.engine` file is hardware-specific and will not transfer to another device.
 
@@ -320,15 +387,20 @@ for.
 ### Marine Tuning
 - Confidence threshold tuning against real ocean conditions
 - Allowlist/blocklist tuning for marine-specific false positive suppression
-- KOLOMVERSE 4K dataset evaluation (access requested, pending approval)
+- KOLOMVERSE training set fine-tuning (1.16TB across 87 zips — requires cloud storage/compute; validation set fine-tuning completed)
+- Mixed-dataset training (KOLOMVERSE + SMD + MVTD) to improve cross-domain generalization
 - Fine-tuning on MVTD training set (130,368 labeled frames available locally) 
   if detection rate improvements are needed
+
+### TensorRT — Complete ✅
+eWaSR and YOLOv8s both exported to TensorRT FP16 engines. Pipeline runs at ~14 FPS on video file, ~17 FPS estimated on live feed. See `~/sail-o-vision/samples/pipeline_trt.py`.
+
 
 ## Datasets used for validation
 
 - [Singapore Maritime Dataset](https://sites.google.com/site/dilipprasad/home/singapore-maritime-dataset) — onboard visible light video
 - [MVTD](https://github.com/AhsanBaidar/MVTD) — 182 sequences, boat/ship/sailboat/USV classes
-- [KOLOMVERSE](https://github.com/MaritimeDataset/KOLOMVERSE) — 4K imagery, pending evaluation
+- [KOLOMVERSE](https://doi.org/10.1109/TITS.2024.3449122) (Nanda et al., IEEE T-ITS 2024) — 186,419 4K images, 5 classes from 21 Korean territorial waters. Validation set (20,000 images) extracted locally. yolov8s fine-tuned and evaluated (mAP50: 0.830). eWaSR fine-tuned on validation subset via Colab T4.
 
 ## License
 

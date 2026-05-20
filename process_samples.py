@@ -3,8 +3,8 @@ import cv2
 import os
 import time
 
-VIDEO_DIR = os.path.expanduser("~/samples/VIS_Onboard/Videos")
-OUTPUT_DIR = os.path.expanduser("~/samples/detections")
+VIDEO_DIR = os.path.expanduser("~/sail-o-vision/samples/VIS_Onboard/Videos")
+OUTPUT_DIR = os.path.expanduser("~/sail-o-vision/samples/detections")
 CONF_THRESHOLD = 0.50
 SAVE_THRESHOLD = 0.25
 EXCLUDED_CLASSES = {"frisbee", "bench", "train"}

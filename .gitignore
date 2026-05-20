@@ -1,10 +1,46 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venvs/
+
+# Large model files
 *.engine
 *.pt
 *.onnx
+*.pth
 *.whl
+
+# Large datasets and directories
+samples/KOLOMVERSE/
+samples/MVTD_data/
+samples/VIS_Onboard/
+samples/detections/
+samples/ewasr_preds/
+samples/masks_test/
+samples/masks_kolomverse/
+samples/pipeline_output/
+samples/crop_test/
 detections/
-__pycache__/
-*.pyc
-.venv/
-venvs/
-samples/
+
+# Video files
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Archives
+*.zip
+*.tar.gz
+
+# Temporary files
+*.tmp
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
