@@ -1,0 +1,71 @@
+@startuml sail_o_vision_network
+
+skinparam componentStyle rectangle
+skinparam defaultFontName Monospaced
+
+interface "N2K Bus (CAN)" as n2k
+interface "NMEA 2000 Bridge" as nmea_udp
+interface "Raynet" as raynet
+
+component [AIS700\nAIS Transceiver] as ais700
+component [AR200\nAHRS] as ar200
+component [Quantum 2\nRadar] as radar
+component [Raymarine Axiom\nMFD] as axiom
+
+component [Signal K Server\n:3000] as signalk
+
+package "Jetson Orin Nano Super" {
+  component [sail-o-vision\nDetection Pipeline] as sov
+  component [Mock ONVIF Server\nsimulate_operations.py] as mock #lightgrey
+}
+
+component [FLIR M300C\nPTZ Camera] as m300c
+component [VHF 156 MHz\nAIS Broadcast] as vhf
+
+' --- N2K Bus connections ---
+ais700 -up- n2k : "TX: PGN 129038/129039\n(AIS vessel reports)\nTX: PGN 127250 (heading)"
+ar200 -up- n2k : "TX: PGN 127257\n(Attitude 10Hz ≤1°)"
+radar -up- n2k : "TX: PGN 128520\n(Tracked Target Data)"
+axiom -up- n2k : "RX: PGN 129038/129039\n(synthetic AIS contacts)\nRX: PGN 129809/129810\n(vessel name label)\nRX: PGN 126983 (Alert)\nTX: PGN 126984 (Alert ACK)"
+signalk -up- n2k 
+nmea_udp -up- n2k : "bridge"
+
+' ---- Raynet bus connections ---
+m300c -down- raynet : "ONVIF PTZ\nAbsoluteMove / GetStatus"
+sov -right- raynet 
+axiom -down- raynet 
+
+' --- DataHub Pro TCP bridge ---
+'dhpro <--> nmea_udp
+sov <-up-> nmea_udp : "VDM (AIS targets)\nTTM (radar targets)\nHDT (heading)\nRMC (own position)\nTX: PGN 129038/129039\n(synthetic contacts)\nTX: PGN 129809/129810\nTX: PGN 126983 (Alert)"
+
+' --- sail-o-vision → Signal K ---
+sov -up-> signalk : "populate\nsafehelm.virtual"
+
+' --- M300C live ---
+'sov <--> m300c : "ONVIF PTZ\nAbsoluteMove / GetStatus\nRTSP (HD video)"
+'m300c --> sov : "RTSP (HD video)"
+
+' --- AIS700 VHF ---
+ais700 <-down-> vhf : "SOTDMA\n(own vessel only —\nno relay of N2K contacts)"
+
+' --- Simulator (dashed) ---
+sov ..> mock : "ONVIF (sim)"
+mock ..> sov : "RTSP (sim)\nalternate video clips"
+
+note top of ais700
+  PGNs 129038/129039 are
+  TRANSMIT only on AIS700.
+  Synthetic contacts on bus
+  are ignored — no ITU
+  re-broadcast risk.
+end note
+
+note bottom of nmea_udp
+  Various devices possible, including
+  - Actisense NGT-1
+  - Actisense W2K-1
+  - Yacht Devices YDWG-02
+end note
+
+@enduml
