@@ -37,7 +37,7 @@ axiom -down- raynet
 
 ' --- DataHub Pro TCP bridge ---
 'dhpro <--> nmea_udp
-sov <-up-> nmea_udp : "VDM (AIS targets)\nTTM (radar targets)\nHDT (heading)\nRMC (own position)\nTX: PGN 129038/129039\n(synthetic contacts)\nTX: PGN 129809/129810\nTX: PGN 126983 (Alert)"
+sov <-up-> nmea_udp : "RX: PGN 129038/129039 (AIS targets)\nRX: PGN 128520 (radar targets)\nRX: PGN 127250 (heading)\nRX: PGN 129025 (own position)\nRX: PGN 127257 (attitude)\nTX: PGN 129038/129039\n(synthetic contacts)\nTX: PGN 129809/129810\nTX: PGN 126983 (Alert)"
 
 ' --- sail-o-vision → Signal K ---
 sov -up-> signalk : "populate\nsafehelm.virtual"

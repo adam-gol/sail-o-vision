@@ -9,7 +9,7 @@ forward arc, with a web-based live view and alert system.
 - NVIDIA Jetson Orin Nano Super Dev Kit ($150 + NVMe SSD) — ~9W active power draw
 - FLIR M300C visible-light PTZ camera (onboard deployment — driveway camera used for development)
 - Raymarine Axiom MFD + AR200 (handles AIS/radar — this system is supplementary)
-- PredictWind DataHub Pro (NMEA 2000 gateway — provides AIS and radar target data over TCP)
+- Transparent N2K-IP bridge (e.g. Actisense NGT-1/W2K-1 or Yacht Devices YDWG-02) — sail-o-vision reads and writes N2K PGNs directly
 
 ## What it does
 
@@ -107,8 +107,7 @@ Standard mAP is not the right metric for navigation safety. The correct framewor
 
 ## Target Priority Architecture
 
-Sail-o-vision fuses camera detections with AIS and radar data from the Raymarine/DataHub Pro 
-stack to prioritize PTZ attention:
+Sail-o-vision fuses camera detections with AIS and radar data from the N2K bus to prioritize PTZ attention:
 
 **Priority 1a** — Camera detection (high confidence), no AIS, no radar contact  
 Unknown object: debris, whale, shipping container, unlit vessel. Highest threat uncertainty. 
@@ -125,15 +124,10 @@ deliberately AIS-dark vessel. PTZ zoom provides visual identification.
 Fully identified contact already tracked by Raymarine. PTZ zoom is opportunistic — confirm 
 vessel type, get a visual on close-passing traffic.
 
-AIS targets arrive as NMEA 0183 VDM sentences, radar auto-acquired targets (via Axiom 
-automatic target acquisition) as TTM sentences, both from the DataHub Pro TCP stream at 
-port 11102. Own vessel heading and position from the same stream allow conversion of all 
-contacts to absolute bearings for camera slew targeting.
-
-Note: NMEA 2000 PGN 128520 (Tracked Target Data) is the N2K equivalent of TTM and contains 
-the same data plus CPA and TCPA directly. Whether the Axiom transmits PGN 128520 when 
-auto-acquisition is active needs verification — if confirmed, direct N2K access via a 
-USB-CAN adapter (e.g. Actisense NGT-1) would be an alternative to the DataHub Pro TCP path.
+AIS targets arrive as PGN 129038/129039, radar auto-acquired targets as PGN 128520 (Tracked
+Target Data), heading as PGN 127250, and own vessel position as PGN 129025 — all read
+directly from the N2K bus via a transparent N2K-IP bridge. No NMEA 0183 conversion layer.
+Own vessel heading allows conversion of all contacts to absolute bearings for camera slew targeting.
 
 ## PTZ Scan Pattern
 
@@ -331,35 +325,21 @@ Open `http://jetson.local:5000` in any browser on your local network.
 
 ## Planned (requires boat + M300C)
 
-### Chartplotter and Alert Integration (Investigation Required)
+### Chartplotter and Alert Integration
 
-Two complementary approaches planned, both to be tested against the actual Axiom:
+**Synthetic AIS targets** — confirmed contacts injected directly onto the N2K bus as
+synthetic Class B AIS entries (PGN 129039 for position, PGN 129809/129810 for vessel
+name label). Axiom displays them as named chart targets. The AIS700 transponder ignores
+these (PGNs 129038/129039 are Transmit-only on the AIS700 — no ITU re-broadcast risk).
 
-**Synthetic AIS targets** — camera-detected contacts injected as fake AIS vessels 
-(fixed MMSIs in reserved range per class: FW-SHIP, FW-BOAT, FW-DEBRIS, FW-LOG etc.) 
-into the NMEA 0183 stream. Axiom displays them as chart targets with CPA vectors using 
-its existing AIS collision avoidance machinery. Approach validated by the 
-[signalk-forward-watch](https://github.com/SkipperDon/signalk-forward-watch) project.
-**Risk**: fake targets must not reach the AIS transponder for retransmission — 
-requires careful NMEA network topology.
+**Alert PGN 126983** — sail-o-vision encodes and transmits PGN 126983 directly onto
+the N2K bus. Triggers the Axiom's internal buzzer for Emergency Alarm class alerts.
+Acknowledgement returns PGN 126984 from the Axiom.
 
-**NMEA 2000 Alert PGNs (126983-126988)** — standards-based alert from Jetson to 
-Axiom via USB-CAN adapter (e.g. Actisense NGT-1). Triggers audible alarm via 
-Digital Yacht NavAlarm. Whether Axiom displays external alerts from PGN 126983 
-needs verification.
+Both paths go directly from sail-o-vision to the N2K bus via the same bridge interface
+used for sensor inputs. Signal K is not in the Axiom integration path.
 
-Both will be implemented and tested — they are complementary: synthetic AIS provides 
-visual chart targets, PGN 126983 provides audible alerts.
-
-### NMEA 0183 Integration via DataHub Pro
-- Connect to DataHub Pro TCP stream (port 11102) for mixed NMEA 0183 data
-- Parse AIS targets (VDM sentences) — position, bearing, MMSI, vessel name
-- Parse radar auto-acquired targets (TTM sentences) — bearing, range, CPA, TCPA
-- Parse own vessel heading (HDG/HDT) and position (RMC/GLL)
-- Convert all contacts to absolute bearings for camera slew targeting
-- Filter camera detections against known contacts to implement target priority queue
-
-### Or NMEA 2000 Integration via TBD
+### N2K Integration
 
 ### PTZ Control
 - ONVIF PTZ control of FLIR M300C
@@ -369,18 +349,12 @@ visual chart targets, PGN 126983 provides audible alerts.
 - Video tracking via OpenCV CSRT/KCF tracker to maintain camera lock on confirmed targets
   while YOLO continues inference on the zoomed view
 
-### Collision Alarms (Investigation Required)
-For Priority 1 targets (camera-only, no AIS, no radar) on a collision course, options 
-for alerting via the Axiom MFD:
+### Collision Alarms
+For Priority 1 targets (camera-only, no AIS, no radar) on a collision course:
 
-- **Standards-based**: NMEA 2000 Alert PGNs 126983-126988 — correct approach, 
-  Axiom support needs verification
-- **Proprietary**: Raymarine PGN 65228 — documented by Yacht Devices as triggering 
-  Raymarine-specific alarms on Axiom (experimental)
-- **Fallback**: Audio/visual alert via sail-o-vision web interface only
-
-All N2K transmission options require a USB-CAN adapter (e.g. Actisense NGT-1, ~$200) 
-to put messages on the SeaTalkNG bus from the Jetson.
+- **Primary**: PGN 126983 (Alert) transmitted directly by sail-o-vision onto the N2K bus — triggers Axiom buzzer. Axiom support confirmed (LightHouse 4 doc 81406).
+- **Proprietary fallback**: Raymarine PGN 65228 — undocumented by Raymarine, reverse-engineered by Yacht Devices ([source](https://www.yachtd.com/news/ais_mob_plb.html)). Byte 4: alarm state (0 = cleared, 1 = active, 2 = dismissed); byte 5: alarm type. Experimental; likely not needed if PGN 126983 works on the Axiom.
+- **Web UI**: Audio/visual alert via sail-o-vision web interface as a secondary channel.
 
 ### Alert Severity Hierarchy
 Camera detections with estimated distance will use a three-level severity:
@@ -402,11 +376,9 @@ device that triggers a physical audible alarm when it receives NMEA 2000 Alert P
 - If the Axiom supports receiving external alert PGNs (needs verification), sail-o-vision 
   could trigger both a NavAlarm audible alert and an Axiom display alert through the same 
   PGN 126983 transmission
-- Requires a USB-CAN adapter (e.g. Actisense NGT-1) for the Jetson to put messages on 
-  the SeaTalkNG bus
+- Uses the same N2K bridge as all other sail-o-vision N2K I/O (no additional hardware needed)
 
-Open question: does the Axiom display alerts triggered by an *external* device sending 
-PGN 126983, or only its own internally-generated alerts?
+Note: Axiom receiving external PGN 126983 alerts is confirmed via LightHouse 4 doc 81406 — needs bench verification with hardware connected.
 
 ### Interesting Third-Party Hardware - Digital Yacht NavAlert
 [NavAlert](https://digitalyacht.co.uk/product/navalert/) is an NMEA 2000 monitor and 
@@ -424,8 +396,8 @@ camera-detected contacts, without requiring the NavAlert hardware:
 - For **moving targets** without AIS, target SOG/COG is unknown — CPA calculation 
   requires tracking bearing rate of change over multiple detections to estimate target 
   motion
-- Once CPA/TCPA is estimated, a PGN 126983 alert can be sent to the N2K bus, 
-  triggering NavAlarm (audible) and potentially the Axiom display
+- Once CPA/TCPA is estimated, sail-o-vision transmits PGN 126983 directly onto the N2K bus,
+  triggering NavAlarm (audible) and the Axiom display
 
 This would give sail-o-vision genuine collision avoidance capability for the class of 
 contacts that Raymarine cannot see — the primary threat scenario the system is designed 

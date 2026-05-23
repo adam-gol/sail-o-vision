@@ -155,19 +155,31 @@ Confirmed contacts are injected onto the N2K bus as synthetic AIS entries so the
 
 The Axiom receives PGN 126983 (Alert) and fires its internal buzzer for `Emergency Alarm` type alerts. Acknowledgement sends PGN 126984 back on the bus.
 
-Practical injection path: Signal K notification API (`PUT /signalk/v1/api/vessels/self/notifications/...`) feeding through to canboat-n2k output plugin. Whether this plugin automatically maps to PGN 126983 is unverified — test with Axiom connected before depending on it. Fallback: encode CAN frame directly via python-can.
+sail-o-vision encodes and transmits PGN 126983 directly onto the N2K bus via the same bridge interface used for all other N2K I/O (python-can or equivalent). Signal K is not in this path.
+
+**Proprietary fallback — PGN 65228:** Raymarine's undocumented alarm PGN, reverse-engineered by Yacht Devices ([source](https://www.yachtd.com/news/ais_mob_plb.html)). Byte 4: alarm state (0 = cleared, 1 = active, 2 = dismissed); byte 5: alarm type. Only needed if bench testing shows the Axiom does not respond to external PGN 126983 alerts.
 
 ---
 
-## NMEA Integration
+## N2K Integration
 
-- AIS targets: NMEA 0183 VDM sentences from Raymarine DataHub Pro TCP stream, port 11102
-- Radar auto-acquired targets: NMEA 0183 TTM sentences, same stream
-- Own vessel heading/position: HDT + RMC sentences, same stream
-- Attitude (pitch/roll/yaw): PGN 127257 from AR200, 10 Hz, ≤1° accuracy
-- Radar tracked targets: PGN 128520 from Axiom (also available as alternative to TTM — investigate)
+sail-o-vision communicates with the N2K bus directly via a transparent N2K-IP bridge (e.g. Actisense NGT-1 USB, Actisense W2K-1, or Yacht Devices YDWG-02). No NMEA 0183 conversion layer; no Signal K intermediary in the data path.
+
+**Inputs (RX):**
+- PGN 129038 / 129039 — AIS Class A/B position reports (from AIS700)
+- PGN 128520 — Radar Tracked Target Data (from Quantum 2 / Axiom)
+- PGN 127250 — Vessel Heading (from AIS700)
+- PGN 129025 — Position, Rapid Update (own vessel)
+- PGN 127257 — Attitude, pitch/roll/yaw at 10 Hz, ≤1° (from AR200)
+
+**Outputs (TX):**
+- PGN 129039 — Synthetic Class B position report (confirmed contacts)
+- PGN 129809 / 129810 — Vessel name label for Axiom chart display
+- PGN 126983 — Alert (triggers Axiom buzzer)
 
 All contacts converted to absolute bearings using own-vessel heading for PTZ slew targeting.
+
+**Signal K:** sail-o-vision also publishes detections to Signal K (`safehelm.virtual`) as a secondary output for Signal K users (OpenCPN, dashboards, etc.). This is independent of the N2K bus write path — Signal K is not used to relay any of the TX PGNs above.
 
 ---
 
