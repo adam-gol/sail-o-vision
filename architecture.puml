@@ -40,7 +40,7 @@ axiom -down- raynet
 sov <-up-> nmea_udp : "RX: PGN 129038/129039 (AIS targets)\nRX: PGN 128520 (radar targets)\nRX: PGN 127250 (heading)\nRX: PGN 129025 (own position)\nRX: PGN 127257 (attitude)\nTX: PGN 129038/129039\n(synthetic contacts)\nTX: PGN 129809/129810\nTX: PGN 126983 (Alert)"
 
 ' --- sail-o-vision → Signal K ---
-sov -up-> signalk : "populate\nsafehelm.virtual"
+sov <-up-> signalk : "populate\nsafehelm.virtual\n(802.3/802.11 IP Network)"
 
 ' --- M300C live ---
 'sov <--> m300c : "ONVIF PTZ\nAbsoluteMove / GetStatus\nRTSP (HD video)"

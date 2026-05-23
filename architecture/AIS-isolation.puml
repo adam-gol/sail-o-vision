@@ -1,0 +1,88 @@
+@startuml AIS_Isolation
+
+skinparam componentStyle rectangle
+skinparam defaultFontName Monospaced
+
+
+package "Signal K Server" {
+  component [Vessel Store] as store
+  component [N2K Output Provider\n(canboat-js / signalk-to-nmea2000)] as n2k_out
+  component [NMEA 0183 Output\n(TCP/serial)] as nmea_out
+  component [Notification System] as notif
+}
+
+component [sail-o-vision /\nSafeHelm] as safehelm
+component [AIS Transponder\n(VHF broadcast)] as transponder
+component [Raymarine Axiom\n(MFD / chartplotter)] as axiom
+component [N2K Bus (can0)] as n2k_bus
+
+' --- Synthetic injection path ---
+safehelm --> store : "WebSocket delta\nsource: safehelm.virtual\nMMSI 998xxxxxx / 999xxxxxx"
+note on link
+  Layer 2 (source tagging)
+end note
+'safehelm -> NL2 : L2
+
+' --- Blocked paths (Layer 1 whitelist) ---
+store --> n2k_out : vessel store entries\n(real + synthetic)
+n2k_out --> n2k_bus : transmitPGNs \n (Layer 1: hard gate)
+
+' --- Safe path: own-vessel sensor PGNs only reach bus ---
+n2k_bus --> transponder : own-vessel PGNs only\n(no synthetic AIS leakage)
+n2k_bus --> axiom : sensor data
+
+' --- NMEA 0183 path (Layer 3) ---
+store --> nmea_out : all sentences
+
+' !AIVDM / !AIVDO EXCLUDED\n(Layer 3: sentence filter) 
+
+nmea_out ---> axiom : NMEA 0183 
+note on link 
+  !AIVDM / !AIVDO EXCLUDED
+  (Layer 3: sentence filter)
+end note
+'nmea_out <-- N1: L3
+
+'left of axiom
+'note on link: !AIVDM / !AIVDO EXCLUDED\n(Layer 3: sentence filter) 
+
+
+'  !AIVDM / !AIVDO EXCLUDED
+'  (Layer 3: sentence filter) 
+'end note
+
+
+' --- Alert path (PGN 126983) ---
+safehelm --> notif : PUT /notifications/\nsafehelm/collision\nstate: alarm
+notif --> n2k_out : maps to PGN 126983\n(Emergency Alarm)
+axiom --> safehelm : PGN 126984\n(acknowledgment)
+
+' note right of n2k_out
+'   Layer 1 (hard gate):
+'   transmitPGNs whitelist = {
+'   127250, 128267, 129025, 
+'   129026, 127245, 128259,130306}
+'   exclude = { 129038/129039/
+'   129040/129041} 
+'   (AIS vessel PGNs)
+' end note
+
+note as Nn2k_out 
+  Layer 1 (hard gate):
+  transmitPGNs whitelist = {
+  127250, 128267, 129025, 
+  129026, 127245, 128259,130306}
+  exclude = { 129038/129039/
+  129040/129041} 
+  (AIS vessel PGNs)
+end note
+'n2k_out -> Nn2k_out : L1
+
+note right of safehelm
+  Layer 4 (MMSI ranges):
+  998xxxxxx = radar/sensor-derived
+  999xxxxxx = camera-only
+  Outside ITU-allocated space
+end note
+
+@enduml
