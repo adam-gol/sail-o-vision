@@ -1,0 +1,38 @@
+name: Render PlantUML diagrams
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.puml'
+  workflow_dispatch:
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download PlantUML
+        run: |
+          curl -sL https://github.com/plantuml/plantuml/releases/latest/download/plantuml.jar \
+               -o /usr/local/bin/plantuml.jar
+
+      - name: Render .puml → .svg
+        run: |
+          find . -name '*.puml' -exec \
+            java -jar /usr/local/bin/plantuml.jar -tsvg -o "$(pwd)" {} \;
+
+      - name: Commit rendered SVGs
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'ci: regenerate SVGs from .puml [skip ci]'
+          file_pattern: '*.svg'

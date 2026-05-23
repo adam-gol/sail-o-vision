@@ -21,6 +21,10 @@ forward arc, with a web-based live view and alert system.
 - Starts automatically on boot via systemd
 - Auto-reconnects on stream dropout
 
+## System Architecture
+
+![Architecture](architecture.svg)
+
 ## Two-Stage Pipeline Architecture
 
 ### Stage 1 — eWaSR Wide FOV Scan
