@@ -1,4 +1,4 @@
-@startuml sail_o_vision_network
+@startuml 
 
 skinparam componentStyle rectangle
 skinparam defaultFontName Monospaced
