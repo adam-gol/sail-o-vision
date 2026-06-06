@@ -68,6 +68,60 @@ what radar doesn't resolve well at close range:
 - Small non-AIS vessels (kayaks, dinghies) at close range
 - Anything that breaks the water surface texture
 
+
+
+### Whale Detection: Capabilities and Limitations
+
+Sail-o-vision includes whale detection as a secondary mission alongside its primary navigation safety function. This section documents the technical basis for whale detection, its inherent limitations, and realistic expectations for operational performance.
+
+#### Detection Approach
+
+Whale detection uses the same two-stage pipeline as vessel detection. Stage 1 (eWaSR) segments the scene into obstacle/water/sky regions and flags candidate blobs. Stage 2 uses YOLOE-26's open-vocabulary capability to classify candidates, with text prompts targeting whale-specific visual features: spout plume, dorsal fin, fluke, and surfacing back.
+
+#### Why Whale Detection is Hard
+
+**The spout is the best thermal target, but sail-o-vision is a visible-light system.** Commercial whale detection systems such as WhaleSpotter (whalespotter.com) are built around thermal/infrared cameras. The physical basis for thermal detection is that a whale's exhalation is a jet of warm compressed air, producing a distinctive thermal signature detectable at ranges up to several kilometers even when the spout subtends less than one pixel. In visible light, the same spout appears as a white/gray mist easily confused with whitecaps, spray, and seabirds. This is not a solvable problem through better algorithms — it is a fundamental physics difference between the two sensing modalities.
+
+**Even purpose-built thermal systems have limited recall.** Smith et al. (2020) conducted a field study using a high-sensitivity cooled LWIR infrared system (FIRSTnavy, Rheinmetall) with custom detection software (Tashtego) during seismic survey operations offshore Atlantic Canada. Despite continuous 244.5° coverage and a research-grade cooled sensor, only 21.3% of cetacean detections made by trained human observers were associated with a real-time IR alert. The IR system missed approximately 79% of detections that experienced marine mammal observers made visually or acoustically. Sail-o-vision, operating in visible light with a narrower scanning arc, should be expected to achieve lower recall than this thermal baseline (Smith et al., *Marine Pollution Bulletin*, Vol. 154, 2020, DOI: 10.1016/j.marpolbul.2020.111026).
+
+**False positives from seabirds are the dominant noise source and can render alerting operationally unusable.** The same study found that in temperate coastal waters with significant seabird activity, false positive rates were high enough that trained MMOs turned the alerting system off entirely rather than deal with the distraction. A gannet breaking the water's surface produces a splash that mimics the appearance of a whale blow in IR imagery; in visible light this confusion is greater still. The study identified a manageable baseline of approximately six false positives per hour in low-bird-density conditions (Arctic/Southern Ocean), but rates exceeding one per minute in the presence of bird flocks. Temporal filtering — requiring candidate detections to persist across multiple frames and recur on a plausible breathing cycle interval (~60–90 seconds) — reduces but does not eliminate seabird false positives. Alert thresholds must be set conservatively to avoid alert fatigue.
+
+**Sail-o-vision is a "bell-ringer," not a stand-alone detection system.** Smith et al. explicitly characterize IR-based marine mammal detection systems as useful "bell-ringers" for human watchkeepers rather than autonomous detection and classification systems. This framing applies with even greater force to a visible-light system. Sail-o-vision whale alerts indicate that something in the scene warrants crew attention — they are not confirmations of whale presence and should not be treated as such.
+
+**Range is limited.** In good visibility and favorable lighting, a whale's surfacing back or dorsal fin may be detectable at 500–1000m with the 30× optical zoom engaged. The spout plume may extend this range somewhat under ideal conditions. At 8 knots, 500m detection range gives approximately 2 minutes of warning.
+
+**There is a geometric close-in blind spot.** At a mast-mounted camera height of approximately 22m, the geometry of the camera's vertical field of view creates a minimum detectable range at sea level of approximately 60–90m depending on camera depression angle. Smith et al. document a similar constraint, noting a minimum detection distance of ~90m at 28.5m camera height. Targets inside this range are not detectable regardless of algorithm performance.
+
+**Night performance is limited.** Whale detection degrades significantly in low-light conditions. In true low-light conditions (new moon, overcast, offshore), whale detection should not be relied upon.
+
+#### Realistic Operational Expectations
+
+Sail-o-vision's whale detection is best understood as opportunistic observation support rather than a collision-avoidance system. It will:
+
+- Provide a "bell-ringer" alert that warrants crew attention and visual confirmation
+- Detect large whales reliably at close range (under ~300m) during daylight in good visibility
+- Provide useful detection at 300–700m under favorable conditions with the zoom pipeline engaged
+- Perform better for surface-active whales than for animals that surface briefly
+
+It will not:
+
+- Achieve the ~21% recall rate of purpose-built cooled LWIR systems, let alone exceed it
+- Provide reliable detection beyond ~1km in any conditions
+- Operate reliably at night or in fog
+- Detect submerged whales
+- Replace watchkeeping or radar as the primary collision avoidance tool
+
+#### Operational Context
+
+Whale strike on recreational vessels is a low base-rate event. Radar remains the primary collision avoidance tool. Sail-o-vision's whale detection capability is a meaningful enhancement to situational awareness in coastal areas with known whale activity, and supports the secondary mission of wildlife observation and documentation.
+
+#### Non-Academic Articles about Whale Detection
+
+https://spectrum.ieee.org/whales-ai-thermal-camera-tracking
+https://spectrum.ieee.org/snotbot-drone-swoops-over-blowholes-to-track-whale-health 
+
+
+
 ## Performance
 
 ### Detection pipeline
